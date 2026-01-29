@@ -1,8 +1,27 @@
 # Ant Colony Simulator
 
-A comprehensive ant colony optimization (ACO) simulation system built in Python.
+A comprehensive ant colony optimization (ACO) simulation system with interactive visualization. This project simulates realistic ant colony behavior using swarm intelligence, pheromone trails, and collective problem-solving.
 
 ## Usage
+
+### Interactive Visualization 
+
+```bash
+python renderer.py
+```
+
+**Controls:**
+- **SPACE**: Pause/Resume simulation
+- **R**: Reset simulation
+- **P**: Toggle pheromone visualization
+- **Left Click**: Add obstacles
+- **Right Click**: Remove obstacles
+
+### Non-Visual Simulation
+
+```bash
+python main.py
+```
 
 ### Basic Simulation
 
@@ -37,11 +56,21 @@ config = SimulationConfig(
 sim = run_simulation(config)
 ```
 
-### Multiple Runs & Comparison
+### Interactive Visualization with Custom Config
 
 ```python
-from main import run_multiple_simulations
+from renderer import AntColonyVisualizer
+from config import SimulationConfig
 
-results = run_multiple_simulations(n_runs=5)
+config = SimulationConfig(
+    world_width=50,
+    world_height=50,
+    n_ants=75,
+    obstacles=[(10, 10), (10, 11), (10, 12)]
+)
+
+viz = AntColonyVisualizer(config)
+viz.run()
 ```
+
 
