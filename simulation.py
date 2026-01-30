@@ -47,15 +47,36 @@ class AntColonySimulation:
         self.timestep = 0
         self.best_path_found: Optional[List[Tuple[int, int]]] = None
         self.best_path_cost = float("inf")
+        
+        # Convergence tracking - route stability based
+        self.iterations_with_same_best = 0
+        self.convergence_threshold = 50  # Iterations of stability
+        self.recent_paths: List[List[Tuple[int, int]]] = []  # Track recent successful paths
+        self.path_stability_window = 20  # Check last N successful paths
+        self.convergence_detected = False  # Flag when converged, but don't stop
     
     def step(self) -> None:
         """Execute one timestep of the simulation."""
         self.timestep += 1
         
-        # Move all ants
+        # Move all ants and track food/return events
+        ants_found_food = []
+        ants_returned_home = []
+        
         for ant in self.ants:
-            if ant.steps_taken < ant.max_steps and not ant.has_food:
-                step_ant(ant, self.world, self.pheromones, self.alpha, self.beta)
+            if ant.steps_taken < ant.max_steps:
+                found_food, returned_home = step_ant(ant, self.world, self.pheromones, self.alpha, self.beta)
+                if found_food:
+                    ants_found_food.append(ant)
+                if returned_home:
+                    ants_returned_home.append(ant)
+        
+        # Handle pheromone updates for ants returning with food
+        self._update_pheromones_from_returns(ants_returned_home)
+        
+        # Evaporate pheromones less frequently to let trails build up
+        if self.timestep % 2 == 0:  # Every 2 timesteps
+            self._evaporate_pheromones()
         
         # Check for new best paths
         self._update_best_path()
@@ -69,14 +90,86 @@ class AntColonySimulation:
             best_path_length=len(self.best_path_found) if self.best_path_found else 0
         )
     
+    def _update_pheromones_from_returns(self, returned_ants: List[Ant]) -> None:
+        """Deposit high-strength pheromones when ants return with food."""
+        for ant in returned_ants:
+            # Deposit strong pheromones on the path this ant took
+            if ant.path and len(ant.path) > 1:
+                # Track successful paths for convergence detection
+                self.recent_paths.append(ant.path.copy())
+                if len(self.recent_paths) > self.path_stability_window:
+                    self.recent_paths.pop(0)  # Keep only recent paths
+                
+                # Standard ACO: deposit is Q / path_length (shorter = more reward)
+                path_cost = len(ant.path) - 1
+                if path_cost > 0:
+                    deposit_amount = self.Q / path_cost
+                else:
+                    deposit_amount = self.Q
+                
+                # Deposit on forward path
+                for i in range(len(ant.path) - 1):
+                    edge = (ant.path[i], ant.path[i + 1])
+                    if edge in self.pheromones:
+                        self.pheromones[edge] += deposit_amount
+
+    
     def _update_best_path(self) -> None:
         """Update best path found so far."""
+        improved = False
         for ant in self.ants:
-            if ant.has_food:
+            if ant.path and len(ant.path) > 1:
                 path_cost = len(ant.path) - 1
                 if path_cost < self.best_path_cost:
                     self.best_path_cost = path_cost
                     self.best_path_found = ant.path.copy()
+                    improved = True
+        
+        # Only increment convergence counter once per timestep if no improvement
+        if improved:
+            self.iterations_with_same_best = 0
+        else:
+            self.iterations_with_same_best += 1
+    
+    def is_converged(self) -> bool:
+        """Check if routes have stabilized (high proportion using same path)."""
+        # Need both: enough iterations AND path found AND stable route selection
+        min_iterations = 20  # Minimum iterations before convergence can be declared
+        
+        if self.timestep < min_iterations or not self.best_path_found:
+            return False
+        
+        # Check route stability: are most ants using the same path?
+        if len(self.recent_paths) < self.path_stability_window * 0.5:
+            return False  # Not enough data yet
+        
+        # Calculate how many recent paths match the best path
+        matching_paths = 0
+        for path in self.recent_paths:
+            if self._paths_are_similar(path, self.best_path_found):
+                matching_paths += 1
+        
+        # Convergence = >70% of ants using the same route
+        stability_ratio = matching_paths / len(self.recent_paths)
+        return stability_ratio > 0.7
+    
+    def _paths_are_similar(self, path1: List[Tuple[int, int]], path2: List[Tuple[int, int]]) -> bool:
+        """Check if two paths are essentially the same route."""
+        if len(path1) != len(path2):
+            return False
+        # Paths match if they visit the same positions
+        return path1 == path2
+    
+    def get_convergence_status(self) -> Tuple[bool, float]:
+        """Get convergence status and stability ratio."""
+        if len(self.recent_paths) == 0:
+            return False, 0.0
+        
+        matching_paths = sum(1 for path in self.recent_paths 
+                           if self.best_path_found and self._paths_are_similar(path, self.best_path_found))
+        stability_ratio = matching_paths / len(self.recent_paths)
+        is_stable = stability_ratio > 0.7 and self.timestep >= 20
+        return is_stable, stability_ratio
     
     def run_timesteps(self, n_timesteps: int) -> None:
         """Run simulation for n timesteps."""
@@ -98,16 +191,38 @@ class AntColonySimulation:
             self._deposit_on_path(self.best_path_found)
     
     def _evaporate_pheromones(self) -> None:
-        """Apply pheromone evaporation."""
+        """Apply pheromone evaporation and diffusion."""
         eps = 1e-6
         rho = max(0.0, min(self.rho, 1.0 - eps))
         if rho == 0.0:
             return
         
+        # First evaporate
         for edge in list(self.pheromones.keys()):
             self.pheromones[edge] *= (1.0 - rho)
             if self.pheromones[edge] < self.min_tau:
                 self.pheromones[edge] = self.min_tau
+        
+        # Then diffuse pheromones to adjacent edges for better trail spread
+        diffusion_rate = 0.1  # 10% of pheromone spreads to nearby edges
+        new_deposits = {}
+        
+        for (from_pos, to_pos), strength in self.pheromones.items():
+            if strength > 0.1:  # Only diffuse significant pheromones
+                # Spread to parallel edges
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    neighbor_from = (from_pos[0] + dr, from_pos[1] + dc)
+                    neighbor_to = (to_pos[0] + dr, to_pos[1] + dc)
+                    
+                    # Check if edges exist
+                    if (neighbor_from, neighbor_to) in self.pheromones:
+                        if (neighbor_from, neighbor_to) not in new_deposits:
+                            new_deposits[(neighbor_from, neighbor_to)] = 0
+                        new_deposits[(neighbor_from, neighbor_to)] += strength * diffusion_rate * 0.25
+        
+        # Apply diffusion deposits
+        for edge, amount in new_deposits.items():
+            self.pheromones[edge] += amount
     
     def _deposit_on_path(self, path: List[Tuple[int, int]]) -> None:
         """Deposit pheromone on a path."""
