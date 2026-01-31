@@ -92,16 +92,7 @@ def find_pheromone_trails(
     pheromones: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float],
     threshold: float = 0.5
 ) -> List[List[Tuple[int, int]]]:
-    """
-    Identify strong pheromone trails (chains of high-pheromone edges).
-    
-    Args:
-        pheromones: Pheromone dictionary.
-        threshold: Minimum pheromone level to consider as part of a trail.
-    
-    Returns:
-        List of trails, where each trail is a list of positions.
-    """
+   
     # Create adjacency list for strong edges
     strong_edges = {edge: pheromone for edge, pheromone in pheromones.items() 
                    if pheromone >= threshold}
@@ -139,16 +130,6 @@ def find_pheromone_trails(
 
 
 def ant_path_efficiency(path: List[Tuple[int, int]], world: GridWorld) -> float:
-    """
-    Calculate efficiency of a path (optimal distance / actual distance).
-    
-    Args:
-        path: List of positions forming a path.
-        world: GridWorld object.
-    
-    Returns:
-        Efficiency ratio (0 to 1, where 1 is optimal).
-    """
     if len(path) < 2:
         return 0.0
     
@@ -165,16 +146,7 @@ def convergence_analysis(
     cost_history: List[float],
     window_size: int = 10
 ) -> Dict[str, float]:
-    """
-    Analyze convergence behavior of optimization.
     
-    Args:
-        cost_history: List of best costs over time.
-        window_size: Size of window for averaging.
-    
-    Returns:
-        Dictionary with convergence metrics.
-    """
     if len(cost_history) < 2:
         return {"convergence_rate": 0, "improvement": 0}
     
@@ -203,15 +175,7 @@ def print_analysis_report(
     world: GridWorld,
     cost_history: List[float] = None
 ) -> None:
-    """
-    Print a comprehensive analysis report.
-    
-    Args:
-        ants: List of Ant objects.
-        pheromones: Pheromone dictionary.
-        world: GridWorld object.
-        cost_history: Optional cost history for convergence analysis.
-    """
+   
     print("\n" + "="*50)
     print("DETAILED ANALYSIS REPORT")
     print("="*50)
