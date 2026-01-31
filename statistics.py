@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Optional
 from ants import Ant
 
 
@@ -29,7 +29,8 @@ def update_statistics(
     stats: ColonyStatistics,
     ants: List[Ant],
     pheromones: Dict,
-    best_path_length: int = None
+    best_path_length: int = None,
+    total_pheromone: Optional[float] = None,
 ) -> None:
     """Update statistics based on current colony state."""
     stats.ants_at_goal = sum(1 for ant in ants if ant.position == ant.path[0].__class__)  # placeholder
@@ -38,7 +39,7 @@ def update_statistics(
     
     path_lengths = [len(ant.path) for ant in ants]
     stats.avg_path_length = sum(path_lengths) / len(path_lengths) if path_lengths else 0.0
-    stats.total_pheromone = sum(pheromones.values())
+    stats.total_pheromone = total_pheromone if total_pheromone is not None else sum(pheromones.values())
     
     if best_path_length is not None:
         stats.best_path_length = best_path_length

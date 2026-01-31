@@ -16,15 +16,15 @@ class SimulationConfig:
     n_ants: int = 50
     max_steps_per_ant: int = 100  # Reduced to force quick exploration, not 500 random steps
     
-    # ACO parameters - based on professional research (Dorigo et al.)
-    # These are proven to work well across many TSP instances
-    alpha: float = 1.0          # Pheromone importance (standard = 1.0)
-    beta: float = 4.0           # Heuristic importance (high = more greedy/exploitative)
-    rho: float = 0.02           # Evaporation rate (lower to preserve successful paths longer)
-    Q: float = 200.0            # HIGH: Successful paths get strong reinforcement
-    tau0: float = 0.0           # Initial pheromone level (0 = pure learning)
+    # ACO parameters - tuned for dynamic pheromone deposition
+    alpha: float = 2.5          # Pheromone importance (higher = follow trails more)
+    beta: float = 2.0           # Heuristic importance (balance exploration/exploitation)
+    rho: float = 0.03           # Evaporation rate (slower to preserve trails)
+    Q: float = 100.0            # Pheromone strength (higher for stronger trails)
     tau0: float = 0.0           # Initial pheromone level (0 = pure learning)
     min_tau: float = 0.0        # Minimum pheromone level (allow full decay)
+    epsilon_explore: float = 0.05  # Random exploration rate (keeps exploration > 0)
+    visit_limit: int = 50          # Visits before a non-optimal cell gets restricted
     
     # Simulation control
     max_timesteps: int = 1000

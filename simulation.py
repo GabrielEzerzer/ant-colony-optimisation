@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
 from gridworld import GridWorld
 from ants import Ant, step_ant
 from pheromones import init_pheromones, get_pheromone, set_pheromone
@@ -19,6 +19,8 @@ class AntColonySimulation:
         tau0: float = 1.0,
         min_tau: float = 1e-6,
         max_steps_per_ant: int = 200,
+        epsilon_explore: float = 0.05,
+        visit_limit: int = 50,
     ):
         """Initialize ant colony simulation."""
         self.world = world
@@ -30,6 +32,8 @@ class AntColonySimulation:
         self.tau0 = tau0
         self.min_tau = min_tau
         self.max_steps_per_ant = max_steps_per_ant
+        self.epsilon_explore = epsilon_explore
+        self.visit_limit = visit_limit
         
         # Initialize colony
         self.ants: List[Ant] = [
@@ -37,9 +41,12 @@ class AntColonySimulation:
             for i in range(n_ants)
         ]
         
-        # Initialize pheromones
-        self.pheromones: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float] = init_pheromones(
+        # Initialize pheromones (separate maps for food and exploration)
+        self.pheromones_food: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float] = init_pheromones(
             world, tau=tau0
+        )
+        self.pheromones_explore: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float] = init_pheromones(
+            world, tau=0.0
         )
         
         # Statistics tracking
@@ -47,6 +54,10 @@ class AntColonySimulation:
         self.timestep = 0
         self.best_path_found: Optional[List[Tuple[int, int]]] = None
         self.best_path_cost = float("inf")
+
+        # Visitation tracking for restricting overused non-optimal cells
+        self.visit_counts: Dict[Tuple[int, int], int] = {}
+        self.restricted_cells: Set[Tuple[int, int]] = set()
         
         # Convergence tracking - route stability based
         self.iterations_with_same_best = 0
@@ -58,67 +69,74 @@ class AntColonySimulation:
     def step(self) -> None:
         """Execute one timestep of the simulation."""
         self.timestep += 1
+
+        # Update restricted cells based on visit frequency and best path
+        self._refresh_restricted_cells()
         
         # Move all ants and track food/return events
         ants_found_food = []
         ants_returned_home = []
         
         for ant in self.ants:
-            if ant.steps_taken < ant.max_steps:
-                found_food, returned_home = step_ant(ant, self.world, self.pheromones, self.alpha, self.beta)
-                if found_food:
-                    ants_found_food.append(ant)
-                if returned_home:
-                    ants_returned_home.append(ant)
+            found_food, returned_home = step_ant(
+                ant,
+                self.world,
+                self.pheromones_food,
+                self.pheromones_explore,
+                self.alpha,
+                self.beta,
+                Q_food=self.Q,
+                Q_explore=self.Q * 0.05,
+                epsilon_explore=self.epsilon_explore,
+                restricted_cells=self.restricted_cells,
+            )
+            if found_food:
+                ants_found_food.append(ant)
+            if returned_home:
+                ants_returned_home.append(ant)
+
+            # Track cell visits after movement
+            pos = ant.position
+            self.visit_counts[pos] = self.visit_counts.get(pos, 0) + 1
         
         # Handle pheromone updates for ants returning with food
         self._update_pheromones_from_returns(ants_returned_home)
         
-        # Evaporate pheromones less frequently to let trails build up
-        if self.timestep % 2 == 0:  # Every 2 timesteps
-            self._evaporate_pheromones()
+        # Evaporate pheromones every timestep (standard ACO)
+        self._evaporate_pheromones()
         
         # Check for new best paths
         self._update_best_path()
         
         # Update statistics
         self.statistics.timestep = self.timestep
+        total_pheromone = sum(self.pheromones_food.values()) + sum(self.pheromones_explore.values())
         update_statistics(
             self.statistics,
             self.ants,
-            self.pheromones,
-            best_path_length=len(self.best_path_found) if self.best_path_found else 0
+            self.pheromones_food,
+            best_path_length=len(self.best_path_found) if self.best_path_found else 0,
+            total_pheromone=total_pheromone,
         )
     
     def _update_pheromones_from_returns(self, returned_ants: List[Ant]) -> None:
-        """Deposit high-strength pheromones when ants return with food."""
+        """Track successful paths for convergence detection."""
         for ant in returned_ants:
-            # Deposit strong pheromones on the path this ant took
+            # Track successful paths for convergence detection
             if ant.path and len(ant.path) > 1:
-                # Track successful paths for convergence detection
                 self.recent_paths.append(ant.path.copy())
                 if len(self.recent_paths) > self.path_stability_window:
                     self.recent_paths.pop(0)  # Keep only recent paths
-                
-                # Standard ACO: deposit is Q / path_length (shorter = more reward)
-                path_cost = len(ant.path) - 1
-                if path_cost > 0:
-                    deposit_amount = self.Q / path_cost
-                else:
-                    deposit_amount = self.Q
-                
-                # Deposit on forward path
-                for i in range(len(ant.path) - 1):
-                    edge = (ant.path[i], ant.path[i + 1])
-                    if edge in self.pheromones:
-                        self.pheromones[edge] += deposit_amount
+                # Note: Pheromones are now deposited dynamically as ants move,
+                # not in bulk after completion. This allows real-time trail formation.
 
     
     def _update_best_path(self) -> None:
         """Update best path found so far."""
         improved = False
+        # Only consider successful paths (ants that have reached food)
         for ant in self.ants:
-            if ant.path and len(ant.path) > 1:
+            if ant.path and len(ant.path) > 1 and (ant.returning_home or ant.has_food or ant.position == self.world.goal):
                 path_cost = len(ant.path) - 1
                 if path_cost < self.best_path_cost:
                     self.best_path_cost = path_cost
@@ -130,6 +148,21 @@ class AntColonySimulation:
             self.iterations_with_same_best = 0
         else:
             self.iterations_with_same_best += 1
+
+    def _refresh_restricted_cells(self) -> None:
+        """Restrict overused cells that are not on the current best path."""
+        if not self.visit_counts:
+            self.restricted_cells.clear()
+            return
+
+        best_path_set = set(self.best_path_found) if self.best_path_found else set()
+        self.restricted_cells = {
+            pos for pos, count in self.visit_counts.items()
+            if count >= self.visit_limit
+            and pos not in best_path_set
+            and pos != self.world.start
+            and pos != self.world.goal
+        }
     
     def is_converged(self) -> bool:
         """Check if routes have stabilized (high proportion using same path)."""
@@ -182,47 +215,24 @@ class AntColonySimulation:
             ant.reset(self.world.start)
     
     def apply_pheromone_update(self) -> None:
-        """Apply evaporation and deposition based on best paths found."""
-        # Evaporation
-        self._evaporate_pheromones()
-        
-        # Deposition on best path
-        if self.best_path_found and self.best_path_cost > 0:
-            self._deposit_on_path(self.best_path_found)
+        """No-op: dynamic pheromone deposition is handled in step()."""
+        return
     
     def _evaporate_pheromones(self) -> None:
-        """Apply pheromone evaporation and diffusion."""
+        """Apply pheromone evaporation for both maps."""
         eps = 1e-6
         rho = max(0.0, min(self.rho, 1.0 - eps))
         if rho == 0.0:
             return
         
-        # First evaporate
-        for edge in list(self.pheromones.keys()):
-            self.pheromones[edge] *= (1.0 - rho)
-            if self.pheromones[edge] < self.min_tau:
-                self.pheromones[edge] = self.min_tau
-        
-        # Then diffuse pheromones to adjacent edges for better trail spread
-        diffusion_rate = 0.1  # 10% of pheromone spreads to nearby edges
-        new_deposits = {}
-        
-        for (from_pos, to_pos), strength in self.pheromones.items():
-            if strength > 0.1:  # Only diffuse significant pheromones
-                # Spread to parallel edges
-                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    neighbor_from = (from_pos[0] + dr, from_pos[1] + dc)
-                    neighbor_to = (to_pos[0] + dr, to_pos[1] + dc)
-                    
-                    # Check if edges exist
-                    if (neighbor_from, neighbor_to) in self.pheromones:
-                        if (neighbor_from, neighbor_to) not in new_deposits:
-                            new_deposits[(neighbor_from, neighbor_to)] = 0
-                        new_deposits[(neighbor_from, neighbor_to)] += strength * diffusion_rate * 0.25
-        
-        # Apply diffusion deposits
-        for edge, amount in new_deposits.items():
-            self.pheromones[edge] += amount
+        # Evaporate food pheromones (slower)
+        for edge in list(self.pheromones_food.keys()):
+            self.pheromones_food[edge] *= (1.0 - rho)
+
+        # Evaporate exploration pheromones (faster)
+        explore_rho = min(0.6, rho * 3.0)
+        for edge in list(self.pheromones_explore.keys()):
+            self.pheromones_explore[edge] *= (1.0 - explore_rho)
     
     def _deposit_on_path(self, path: List[Tuple[int, int]]) -> None:
         """Deposit pheromone on a path."""
@@ -230,8 +240,8 @@ class AntColonySimulation:
         
         for i in range(len(path) - 1):
             edge = (path[i], path[i + 1])
-            current_pheromone = self.pheromones.get(edge, self.tau0)
-            self.pheromones[edge] = current_pheromone + amount
+            current_pheromone = self.pheromones_food.get(edge, self.tau0)
+            self.pheromones_food[edge] = current_pheromone + amount
     
     def get_ant_positions(self) -> List[Tuple[int, Tuple[int, int]]]:
         """Get current positions of all ants."""

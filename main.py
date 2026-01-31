@@ -41,6 +41,8 @@ def run_simulation(config: SimulationConfig = None) -> AntColonySimulation:
         tau0=config.tau0,
         min_tau=config.min_tau,
         max_steps_per_ant=config.max_steps_per_ant,
+        epsilon_explore=config.epsilon_explore,
+        visit_limit=config.visit_limit,
     )
     
     print(f"Starting simulation with {config.n_ants} ants...")
@@ -51,9 +53,7 @@ def run_simulation(config: SimulationConfig = None) -> AntColonySimulation:
     for timestep in range(config.max_timesteps):
         sim.step()
         
-        # Periodically update pheromones
-        if timestep % config.pheromone_update_interval == 0:
-            sim.apply_pheromone_update()
+        # Dynamic pheromone deposition already handled in sim.step()
         
         # Print status every 100 timesteps
         if (timestep + 1) % 100 == 0:
@@ -124,5 +124,4 @@ if __name__ == "__main__":
     # Run a single simulation with default config
     sim = run_simulation()
     
-    # Optionally run multiple simulations:
     # results = run_multiple_simulations(3, DEFAULT_CONFIG)

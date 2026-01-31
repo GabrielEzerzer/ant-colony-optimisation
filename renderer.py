@@ -20,7 +20,8 @@ COLOR_START = (0, 255, 100)
 COLOR_GOAL = (255, 50, 50)        
 COLOR_OBJECTIVE = (100, 200, 255) # Light blue for objective
 COLOR_ANT = (200, 200, 200)       
-COLOR_PHEROMONE = (0, 255, 150)   
+COLOR_PHEROMONE = (255, 165, 0)   
+COLOR_PHEROMONE_EXPLORE = (255, 200, 120)
 COLOR_BEST_PATH = (255, 215, 0)
 
 
@@ -142,8 +143,14 @@ class AntColonyVisualizer:
                             old_objective = self.objective_pos
                             self.objective_pos = pos
                             self.world.goal = pos
-                            # Reset convergence tracking since goal moved
+                            # Reset convergence tracking and best path since goal moved
                             self.sim.recent_paths.clear()
+                            self.sim.best_path_found = None
+                            self.sim.best_path_cost = float("inf")
+                            self.sim.iterations_with_same_best = 0
+                            self.sim.convergence_detected = False
+                            self.sim.visit_counts.clear()
+                            self.sim.restricted_cells.clear()
                             self.convergence_notified = False
                             print(f"Moved food from {old_objective} to {pos} - colony will re-route!")
 
@@ -159,7 +166,9 @@ class AntColonyVisualizer:
             rho=self.config.rho,
             Q=self.config.Q,
             tau0=self.config.tau0,
-            max_steps_per_ant=self.config.max_steps_per_ant
+            max_steps_per_ant=self.config.max_steps_per_ant,
+            epsilon_explore=self.config.epsilon_explore,
+            visit_limit=self.config.visit_limit,
         )
 
     def reset_simulation(self):
@@ -172,7 +181,10 @@ class AntColonyVisualizer:
             beta=self.config.beta,
             rho=self.config.rho,
             Q=self.config.Q,
-            tau0=self.config.tau0
+            tau0=self.config.tau0,
+            max_steps_per_ant=self.config.max_steps_per_ant,
+            epsilon_explore=self.config.epsilon_explore,
+            visit_limit=self.config.visit_limit,
         )
 
     def draw(self):
@@ -239,23 +251,36 @@ class AntColonyVisualizer:
         if self.show_pheromones:
             pheromone_surface = pygame.Surface((self.width_px, self.height_px), pygame.SRCALPHA)
             
-            max_pheromone = max(self.sim.pheromones.values()) if self.sim.pheromones else 1.0
-            if max_pheromone == 0:
-                max_pheromone = 1.0
+            max_food = max(self.sim.pheromones_food.values()) if self.sim.pheromones_food else 1.0
+            max_explore = max(self.sim.pheromones_explore.values()) if self.sim.pheromones_explore else 1.0
+            if max_food < 0.001:
+                max_food = 0.001
+            if max_explore < 0.001:
+                max_explore = 0.001
 
-            # Draw all edges with pheromone > 0 (since we start at 0 now)
-            min_visible_pheromone = 0.01  # Show anything above this threshold
-            for (start_node, end_node), strength in self.sim.pheromones.items():
+            min_visible_pheromone = 0.0001
+
+            # Draw exploration pheromones (lighter orange)
+            for (start_node, end_node), strength in self.sim.pheromones_explore.items():
                 if strength <= min_visible_pheromone:
                     continue
-                
                 start_px = self.get_pixel_pos(start_node)
                 end_px = self.get_pixel_pos(end_node)
-                
-                # Intensity based on relative strength - very visible trails
-                intensity = min(1.0, strength / (max_pheromone * 0.2))  # 0.2 to make trails VERY visible
-                alpha = int(255 * intensity)
-                
+                normalized = strength / max_explore
+                intensity = min(1.0, normalized ** 0.5)
+                alpha = max(30, int(180 * intensity))
+                color = (*COLOR_PHEROMONE_EXPLORE, alpha)
+                pygame.draw.line(pheromone_surface, color, start_px, end_px, 2)
+
+            # Draw food pheromones (strong orange)
+            for (start_node, end_node), strength in self.sim.pheromones_food.items():
+                if strength <= min_visible_pheromone:
+                    continue
+                start_px = self.get_pixel_pos(start_node)
+                end_px = self.get_pixel_pos(end_node)
+                normalized = strength / max_food
+                intensity = min(1.0, normalized ** 0.5)
+                alpha = max(60, int(255 * intensity))
                 color = (*COLOR_PHEROMONE, alpha)
                 pygame.draw.line(pheromone_surface, color, start_px, end_px, 2)
             
@@ -382,9 +407,7 @@ class AntColonyVisualizer:
                     print(f"Simulation continues - try moving food or adding obstacles!")
                     print(f"{'='*60}\n")
                 
-                # Apply pheromone update periodically 
-                if self.sim.timestep % 1 == 0:  # Every timestep for faster learning
-                    self.sim.apply_pheromone_update()
+                # Dynamic pheromone deposition already handled in simulation.step()
 
             self.draw()
             self.clock.tick(FPS)
